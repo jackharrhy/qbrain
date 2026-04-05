@@ -94,13 +94,13 @@ def _startup() -> None:
     init_db()
 
 
-@app.get("/health", response_model=HealthResponse, tags=["system"])
+@app.get("/api/health", response_model=HealthResponse, tags=["system"])
 def health() -> HealthResponse:
     return HealthResponse(ok=True)
 
 
 @app.post(
-    "/ingest",
+    "/api/ingest",
     response_model=IngestResponse,
     status_code=status.HTTP_200_OK,
     tags=["mutation"],
@@ -114,7 +114,7 @@ def ingest(
     return IngestResponse(**ingest_source(inp.source_ref))
 
 
-@app.get("/search", response_model=SearchResponse, tags=["query"])
+@app.get("/api/search", response_model=SearchResponse, tags=["query"])
 def search(
     q: Annotated[str, Query(min_length=1, description="FTS query string")],
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
@@ -123,13 +123,14 @@ def search(
     return SearchResponse(results=hits)
 
 
-@app.post("/ask", response_model=AskResponse, tags=["query"])
+@app.post("/api/ask", response_model=AskResponse, tags=["query"])
 def ask_route(inp: AskRequest) -> AskResponse:
     out = ask(inp.question)
     hits = [SearchHit(**row) for row in out.get("hits", [])]
     return AskResponse(answer=out.get("answer", ""), hits=hits)
 
 
+@app.get("/", response_class=HTMLResponse, tags=["ui"])
 @app.get("/ui", response_class=HTMLResponse, tags=["ui"])
 def ui_home() -> HTMLResponse:
     body = """

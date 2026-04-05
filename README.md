@@ -12,6 +12,16 @@ uv run qbrain search quake
 uv run qbrain serve --host 0.0.0.0 --port 8099
 ```
 
+UI:
+- `/` (primary UI)
+- `/ui` (same UI alias)
+
+API:
+- `/api/health`
+- `/api/search`
+- `/api/ask`
+- `/api/ingest`
+
 ## Env
 
 - `QBRAIN_DB` (default: `data/qbrain.db`)
@@ -21,14 +31,14 @@ uv run qbrain serve --host 0.0.0.0 --port 8099
 
 ## API auth (mutation endpoints)
 
-`/ingest` requires a token via either:
+`/api/ingest` requires a token via either:
 - `X-API-Token: <token>`
 - `Authorization: Bearer <token>`
 
 Example:
 
 ```bash
-curl -X POST http://127.0.0.1:8099/ingest \
+curl -X POST http://127.0.0.1:8099/api/ingest \
   -H 'Content-Type: application/json' \
   -H 'X-API-Token: instagib' \
   -d '{"source_ref":"https://jackharrhy.dev/quake"}'
