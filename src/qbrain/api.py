@@ -66,13 +66,17 @@ def _base_shell(body: str, title: str = "qbrain") -> str:
     <script src=\"{HTMX_CDN}\"></script>
     <style>
       :root {{ color-scheme: light dark; }}
-      body {{ font-family: Inter, system-ui, sans-serif; max-width: 920px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }}
+      body {{ font-family: Inter, system-ui, sans-serif; max-width: 1080px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }}
       h1 {{ margin: 0 0 1rem; font-size: 1.6rem; }}
       input[type=search] {{ width: 100%; padding: .7rem .9rem; border-radius: .6rem; border: 1px solid #9994; font: inherit; }}
+      .layout {{ display: grid; grid-template-columns: 280px 1fr; gap: 1rem; align-items: start; }}
       .card {{ border: 1px solid #9994; border-radius: .7rem; padding: .75rem .9rem; margin: .7rem 0; }}
       .muted {{ opacity: .75; font-size: .92rem; }}
       a {{ text-decoration: none; }}
       code {{ background: #9992; padding: .1rem .3rem; border-radius: .3rem; }}
+      .note-row {{ border-bottom: 1px solid #9993; padding: .5rem 0; display:flex; justify-content:space-between; gap:.5rem; }}
+      .btn {{ border:1px solid #9994; border-radius:.45rem; padding:.2rem .5rem; font-size:.85rem; }}
+      @media (max-width: 900px) {{ .layout {{ grid-template-columns: 1fr; }} }}
     </style>
   </head>
   <body>{body}</body>
@@ -398,19 +402,30 @@ def review_queue(
 def ui_home() -> HTMLResponse:
     body = """
     <h1>qbrain</h1>
-    <p class='muted'>Search sources and chunks. Click a source to view rendered content.</p>
+    <p class='muted'>Search at top. Notes in sidebar. Main panel for results/source view.</p>
     <input
       type='search'
       name='q'
       placeholder='Search (e.g. quake movement idtech2)'
       hx-get='/ui/search'
       hx-trigger='keyup changed delay:250ms'
-      hx-target='#results'
+      hx-target='#mainview'
       hx-swap='innerHTML'
     />
-    <div id='results' class='muted' style='margin-top:1rem'>Start typing to search…</div>
+
+    <div class='layout' style='margin-top:1rem'>
+      <aside class='card'>
+        <h3 style='margin:.2rem 0 .6rem'>Notes</h3>
+        <div id='notelist' hx-get='/ui/notes' hx-trigger='load' hx-swap='innerHTML'>
+          <div class='muted'>Loading notes…</div>
+        </div>
+      </aside>
+      <main id='mainview' class='card'>
+        <div class='muted'>Start typing to search…</div>
+      </main>
+    </div>
     """
-    return HTMLResponse(_base_shell(body, title="qbrain · search"))
+    return HTMLResponse(_base_shell(body, title="qbrain"))
 
 
 @app.get("/ui/search", response_class=HTMLResponse, tags=["ui"])
@@ -434,6 +449,64 @@ def ui_search(
             )
         )
     return HTMLResponse("\n".join(parts))
+
+
+@app.get("/ui/notes", response_class=HTMLResponse, tags=["ui"])
+def ui_notes(
+    stage: Annotated[str, Query()] = "scratch",
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> HTMLResponse:
+    conn = connect()
+    rows = conn.execute(
+        """
+        SELECT id, title, stage, status, updated_at
+        FROM notes
+        WHERE stage = ?
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        (stage, limit),
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return HTMLResponse("<div class='muted'>No notes yet.</div>")
+
+    out: list[str] = []
+    for r in rows:
+        title = (r['title'] or f"note #{r['id']}").strip()
+        out.append(
+            "<div class='note-row'>"
+            f"<span title='{title}'>{title[:46]}</span>"
+            f"<a class='btn' hx-get='/ui/note/{r['id']}' hx-target='#mainview' hx-swap='innerHTML'>view</a>"
+            "</div>"
+        )
+    return HTMLResponse("\n".join(out))
+
+
+@app.get('/ui/note/{note_id}', response_class=HTMLResponse, tags=['ui'])
+def ui_note(note_id: int) -> HTMLResponse:
+    conn = connect()
+    row = conn.execute(
+        """
+        SELECT id,title,body,stage,status,confidence,source_count,updated_at
+        FROM notes
+        WHERE id = ?
+        """,
+        (note_id,),
+    ).fetchone()
+    conn.close()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail='Note not found')
+
+    rendered = _render_markdown(row['body'])
+    body = (
+        f"<h2 style='margin:.2rem 0'>{row['title']}</h2>"
+        f"<p class='muted'>stage={row['stage']} · status={row['status']} · confidence={row['confidence']}</p>"
+        f"<article>{rendered}</article>"
+    )
+    return HTMLResponse(body)
 
 
 @app.get("/ui/source/{doc_id}", response_class=HTMLResponse, tags=["ui"])
