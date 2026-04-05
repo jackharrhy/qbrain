@@ -24,7 +24,19 @@ def _chunk_text(text: str, max_chars: int = 2000) -> list[str]:
 
 def _fetch_text(source_ref: str) -> tuple[str, str]:
     if source_ref.startswith("http://") or source_ref.startswith("https://"):
+        # Prefer Defuddle markdown extraction for cleaner semantic ingest.
+        defuddle_url = f"https://defuddle.md/{source_ref}"
         with httpx.Client(timeout=60, follow_redirects=True) as client:
+            try:
+                r = client.get(defuddle_url)
+                r.raise_for_status()
+                markdown_text = r.text
+                if markdown_text.strip():
+                    return source_ref, markdown_text
+            except Exception:
+                pass
+
+            # Fallback: raw HTML content.
             r = client.get(source_ref)
             r.raise_for_status()
             return source_ref, r.text

@@ -2,6 +2,8 @@
 
 Quake-focused LLM knowledge brain backed by SQLite + FTS5 + embeddings.
 
+For URL ingestion, qbrain prefers Defuddle (`https://defuddle.md/`) to convert pages into cleaner markdown before chunking/embedding.
+
 ## Quick start
 
 ```bash
