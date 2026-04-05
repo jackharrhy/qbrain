@@ -20,9 +20,15 @@ UI:
 
 API:
 - `/api/health`
+- `/api/sources`
 - `/api/search`
 - `/api/ask`
 - `/api/ingest`
+- `/api/ingest/batch`
+- `/api/extract-links/{source_id}`
+- `/api/discover/from-source/{source_id}`
+- `/api/notes` (GET/POST/PATCH + promote)
+- `/api/review/queue`
 
 ## Env
 

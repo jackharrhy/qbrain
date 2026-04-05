@@ -4,24 +4,36 @@ import os
 import secrets
 from typing import Annotated
 
-from fastapi import FastAPI, Header, HTTPException, Query, status
+from fastapi import FastAPI, Header, HTTPException, Path, Query, status
 from fastapi.responses import HTMLResponse
 
 from .api_models import (
     AskRequest,
     AskResponse,
+    DiscoverRequest,
+    DiscoverResponse,
+    ExtractLinksResponse,
     HealthResponse,
+    IngestBatchRequest,
+    IngestBatchResponse,
     IngestRequest,
     IngestResponse,
+    NoteCreateRequest,
+    NoteItem,
+    NoteListResponse,
+    NoteUpdateRequest,
     SearchHit,
     SearchResponse,
+    SourceItem,
+    SourceListResponse,
 )
 from .ask import ask
 from .db import connect, init_db
+from .discover import extract_links
 from .ingest import ingest_source
 from .search import search_fts
 
-app = FastAPI(title="qbrain", version="0.1.0")
+app = FastAPI(title="qbrain", version="0.2.0")
 
 INTER_FONT = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap"
 HTMX_CDN = "https://unpkg.com/htmx.org@1.9.12"
@@ -33,7 +45,6 @@ def _render_markdown(md_text: str) -> str:
 
         return MarkdownIt("commonmark", {"html": False, "linkify": True}).render(md_text)
     except Exception:
-        # ultra-safe fallback if markdown parser is unavailable
         escaped = (
             md_text.replace("&", "&amp;")
             .replace("<", "&lt;")
@@ -69,7 +80,6 @@ def _base_shell(body: str, title: str = "qbrain") -> str:
 
 
 def _required_mutation_token() -> str:
-    # User-requested default for quick hardening; override via env in production.
     return os.getenv("QBRAIN_API_TOKEN", "instagib")
 
 
@@ -99,6 +109,24 @@ def health() -> HealthResponse:
     return HealthResponse(ok=True)
 
 
+@app.get("/api/sources", response_model=SourceListResponse, tags=["query"])
+def list_sources(
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> SourceListResponse:
+    conn = connect()
+    rows = conn.execute(
+        """
+        SELECT id, source_type, source_ref, title, fetched_at
+        FROM sources
+        ORDER BY id ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return SourceListResponse(sources=[SourceItem(**dict(r)) for r in rows])
+
+
 @app.post(
     "/api/ingest",
     response_model=IngestResponse,
@@ -112,6 +140,33 @@ def ingest(
 ) -> IngestResponse:
     _authorize_mutation(x_api_token, authorization)
     return IngestResponse(**ingest_source(inp.source_ref))
+
+
+@app.post(
+    "/api/ingest/batch",
+    response_model=IngestBatchResponse,
+    tags=["mutation"],
+)
+def ingest_batch(
+    inp: IngestBatchRequest,
+    x_api_token: Annotated[str | None, Header(alias="X-API-Token")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> IngestBatchResponse:
+    _authorize_mutation(x_api_token, authorization)
+    results: list[IngestResponse] = []
+    errors: list[str] = []
+    for ref in inp.source_refs:
+        try:
+            results.append(IngestResponse(**ingest_source(ref)))
+        except Exception as e:
+            errors.append(f"{ref}: {e}")
+    return IngestBatchResponse(
+        total=len(inp.source_refs),
+        ok=len(results),
+        failed=len(errors),
+        results=results,
+        errors=errors,
+    )
 
 
 @app.get("/api/search", response_model=SearchResponse, tags=["query"])
@@ -130,12 +185,220 @@ def ask_route(inp: AskRequest) -> AskResponse:
     return AskResponse(answer=out.get("answer", ""), hits=hits)
 
 
+@app.get(
+    "/api/extract-links/{source_id}",
+    response_model=ExtractLinksResponse,
+    tags=["query"],
+)
+def extract_links_from_source(
+    source_id: Annotated[int, Path(ge=1)],
+) -> ExtractLinksResponse:
+    conn = connect()
+    row = conn.execute(
+        "SELECT source_ref, raw_text FROM sources WHERE id=?",
+        (source_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return ExtractLinksResponse(
+        links=extract_links(row["raw_text"], base_url=row["source_ref"])
+    )
+
+
+@app.post(
+    "/api/discover/from-source/{source_id}",
+    response_model=DiscoverResponse,
+    tags=["mutation"],
+)
+def discover_from_source(
+    source_id: Annotated[int, Path(ge=1)],
+    inp: DiscoverRequest,
+    x_api_token: Annotated[str | None, Header(alias="X-API-Token")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> DiscoverResponse:
+    _authorize_mutation(x_api_token, authorization)
+
+    conn = connect()
+    row = conn.execute(
+        "SELECT source_ref, raw_text FROM sources WHERE id=?",
+        (source_id,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    links = extract_links(row["raw_text"], base_url=row["source_ref"])[: inp.limit]
+    ingested = 0
+    if inp.ingest:
+        for link in links:
+            try:
+                ingest_source(link)
+                ingested += 1
+            except Exception:
+                pass
+
+    return DiscoverResponse(
+        source_id=source_id,
+        discovered=len(links),
+        links=links,
+        ingested=ingested,
+    )
+
+
+@app.get("/api/notes", response_model=NoteListResponse, tags=["query"])
+def list_notes(
+    stage: Annotated[str | None, Query()] = None,
+    status_filter: Annotated[str | None, Query(alias="status")] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> NoteListResponse:
+    conn = connect()
+    sql = (
+        "SELECT id,title,body,stage,status,confidence,source_count,created_at,updated_at "
+        "FROM notes"
+    )
+    where = []
+    params: list[object] = []
+    if stage:
+        where.append("stage=?")
+        params.append(stage)
+    if status_filter:
+        where.append("status=?")
+        params.append(status_filter)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY updated_at DESC LIMIT ?"
+    params.append(limit)
+
+    rows = conn.execute(sql, tuple(params)).fetchall()
+    conn.close()
+    return NoteListResponse(notes=[NoteItem(**dict(r)) for r in rows])
+
+
+@app.post("/api/notes", response_model=NoteItem, tags=["mutation"])
+def create_note(
+    inp: NoteCreateRequest,
+    x_api_token: Annotated[str | None, Header(alias="X-API-Token")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> NoteItem:
+    _authorize_mutation(x_api_token, authorization)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO notes(title, body, stage, status, confidence, source_count)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (inp.title, inp.body, inp.stage, inp.status, inp.confidence, inp.source_count),
+    )
+    note_id = cur.lastrowid
+    row = conn.execute(
+        "SELECT id,title,body,stage,status,confidence,source_count,created_at,updated_at FROM notes WHERE id=?",
+        (note_id,),
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return NoteItem(**dict(row))
+
+
+@app.patch("/api/notes/{note_id}", response_model=NoteItem, tags=["mutation"])
+def update_note(
+    note_id: Annotated[int, Path(ge=1)],
+    inp: NoteUpdateRequest,
+    x_api_token: Annotated[str | None, Header(alias="X-API-Token")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> NoteItem:
+    _authorize_mutation(x_api_token, authorization)
+
+    updates = {k: v for k, v in inp.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    updates["updated_at"] = "__NOW__"
+    set_parts = []
+    params: list[object] = []
+    for k, v in updates.items():
+        if k == "updated_at":
+            set_parts.append("updated_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now'))")
+        else:
+            set_parts.append(f"{k}=?")
+            params.append(v)
+
+    params.append(note_id)
+
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(f"UPDATE notes SET {', '.join(set_parts)} WHERE id=?", tuple(params))
+    if cur.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    row = conn.execute(
+        "SELECT id,title,body,stage,status,confidence,source_count,created_at,updated_at FROM notes WHERE id=?",
+        (note_id,),
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return NoteItem(**dict(row))
+
+
+@app.post("/api/notes/{note_id}/promote", response_model=NoteItem, tags=["mutation"])
+def promote_note(
+    note_id: Annotated[int, Path(ge=1)],
+    x_api_token: Annotated[str | None, Header(alias="X-API-Token")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> NoteItem:
+    _authorize_mutation(x_api_token, authorization)
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE notes
+        SET stage='research',
+            status='reviewed',
+            updated_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+        WHERE id=?
+        """,
+        (note_id,),
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    row = conn.execute(
+        "SELECT id,title,body,stage,status,confidence,source_count,created_at,updated_at FROM notes WHERE id=?",
+        (note_id,),
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return NoteItem(**dict(row))
+
+
+@app.get("/api/review/queue", response_model=NoteListResponse, tags=["query"])
+def review_queue(
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> NoteListResponse:
+    conn = connect()
+    rows = conn.execute(
+        """
+        SELECT id,title,body,stage,status,confidence,source_count,created_at,updated_at
+        FROM notes
+        WHERE stage='scratch' OR confidence < 0.6 OR source_count = 0
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return NoteListResponse(notes=[NoteItem(**dict(r)) for r in rows])
+
+
 @app.get("/", response_class=HTMLResponse, tags=["ui"])
 @app.get("/ui", response_class=HTMLResponse, tags=["ui"])
 def ui_home() -> HTMLResponse:
     body = """
     <h1>qbrain</h1>
-    <p class='muted'>Search sources and chunks. Click a source to view raw markdown rendered as HTML.</p>
+    <p class='muted'>Search sources and chunks. Click a source to view rendered content.</p>
     <input
       type='search'
       name='q'
