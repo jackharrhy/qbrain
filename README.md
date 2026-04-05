@@ -17,6 +17,22 @@ uv run qbrain serve --host 0.0.0.0 --port 8099
 - `QBRAIN_DB` (default: `data/qbrain.db`)
 - `OPENAI_API_KEY` (required for embeddings + ask)
 - `QBRAIN_EMBED_MODEL` (default: `text-embedding-3-small`)
+- `QBRAIN_API_TOKEN` (required for mutating endpoints like `/ingest`; default fallback: `instagib`)
+
+## API auth (mutation endpoints)
+
+`/ingest` requires a token via either:
+- `X-API-Token: <token>`
+- `Authorization: Bearer <token>`
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8099/ingest \
+  -H 'Content-Type: application/json' \
+  -H 'X-API-Token: instagib' \
+  -d '{"source_ref":"https://jackharrhy.dev/quake"}'
+```
 
 ## Docker
 
