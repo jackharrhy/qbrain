@@ -1,0 +1,24 @@
+[project]
+name = "qbrain"
+version = "0.1.0"
+description = "SQLite + FTS5 + embeddings knowledge brain"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12.3",
+  "fastapi>=0.111.0",
+  "uvicorn>=0.30.0",
+  "pydantic>=2.8.0",
+  "httpx>=0.27.0",
+  "python-dotenv>=1.0.1"
+]
+
+[project.scripts]
+qbrain = "qbrain.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/qbrain"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
