@@ -283,6 +283,7 @@ source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "markdown-it-py" },
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "typer" },
@@ -293,6 +294,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.111.0" },
     { name = "httpx", specifier = ">=0.27.0" },
+    { name = "markdown-it-py", specifier = ">=3.0.0" },
     { name = "pydantic", specifier = ">=2.8.0" },
     { name = "python-dotenv", specifier = ">=1.0.1" },
     { name = "typer", specifier = ">=0.12.3" },
