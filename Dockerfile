@@ -12,6 +12,9 @@ RUN uv sync --frozen --no-dev
 # App source
 COPY src/ src/
 
+# Ensure the project package reflects latest source files
+RUN uv sync --frozen --no-dev
+
 # Runtime defaults
 ENV QBRAIN_DB=/app/data/qbrain.db \
     QBRAIN_EMBED_MODEL=text-embedding-3-small
