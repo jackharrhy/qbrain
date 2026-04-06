@@ -109,6 +109,7 @@ class NoteCreateRequest(BaseModel):
     status: str = "draft"
     confidence: float = 0.5
     source_count: int = 0
+    citations: list["CitationInput"] = Field(default_factory=list)
 
 
 class NoteUpdateRequest(BaseModel):
@@ -119,6 +120,7 @@ class NoteUpdateRequest(BaseModel):
     status: str | None = None
     confidence: float | None = None
     source_count: int | None = None
+    citations: list["CitationInput"] | None = None
 
 
 class NoteItem(BaseModel):
@@ -132,6 +134,41 @@ class NoteItem(BaseModel):
     source_count: int
     created_at: str
     updated_at: str
+
+
+class CitationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ordinal: int = Field(..., ge=1)
+    label: str = ""
+    url: str
+    claim_text: str = ""
+    quote: str = ""
+
+
+class CitationItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: int
+    note_id: int
+    ordinal: int
+    label: str
+    url: str
+    claim_text: str
+    quote: str
+    created_at: str
+
+
+class CitationListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    citations: list[CitationItem]
+
+
+class CitationReplaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    citations: list[CitationInput] = Field(default_factory=list)
+
+
+NoteCreateRequest.model_rebuild()
+NoteUpdateRequest.model_rebuild()
 
 
 class NoteListResponse(BaseModel):

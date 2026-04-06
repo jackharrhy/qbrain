@@ -59,6 +59,18 @@ CREATE TABLE IF NOT EXISTS notes (
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
+CREATE TABLE IF NOT EXISTS citations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL,
+  claim_text TEXT NOT NULL DEFAULT '',
+  quote TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  UNIQUE(note_id, ordinal)
+);
+
 CREATE TABLE IF NOT EXISTS links (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   from_type TEXT NOT NULL,

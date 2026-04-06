@@ -36,11 +36,30 @@ def _ensure_note_columns(conn: sqlite3.Connection) -> None:
         )
 
 
+def _ensure_citations_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS citations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+          ordinal INTEGER NOT NULL,
+          label TEXT NOT NULL DEFAULT '',
+          url TEXT NOT NULL,
+          claim_text TEXT NOT NULL DEFAULT '',
+          quote TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+          UNIQUE(note_id, ordinal)
+        )
+        """
+    )
+
+
 def init_db() -> None:
     from . import schema
 
     conn = connect()
     conn.executescript(schema.SQL)
     _ensure_note_columns(conn)
+    _ensure_citations_table(conn)
     conn.commit()
     conn.close()

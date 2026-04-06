@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
+import html
 from typing import Annotated
 
 from fastapi import FastAPI, Header, HTTPException, Path, Query, status
@@ -12,6 +14,9 @@ from .api_models import (
     AskResponse,
     DiscoverRequest,
     DiscoverResponse,
+    CitationListResponse,
+    CitationReplaceRequest,
+    CitationItem,
     ExtractLinksResponse,
     HealthResponse,
     IngestBatchRequest,
@@ -52,6 +57,46 @@ def _render_markdown(md_text: str) -> str:
             .replace(">", "&gt;")
         )
         return f"<pre>{escaped}</pre>"
+
+
+def _render_note_markdown(md_text: str) -> str:
+    rendered = _render_markdown(md_text)
+    # Inline markers like [cite:1] -> superscript reference.
+    return re.sub(
+        r"\[cite:(\d+)\]",
+        r"<sup><a href='#cite-\1'>[\1]</a></sup>",
+        rendered,
+    )
+
+
+def _replace_citations(conn, note_id: int, citations) -> int:
+    conn.execute("DELETE FROM citations WHERE note_id=?", (note_id,))
+    for c in citations:
+        conn.execute(
+            """
+            INSERT INTO citations(note_id, ordinal, label, url, claim_text, quote)
+            VALUES (?,?,?,?,?,?)
+            """,
+            (note_id, c.ordinal, c.label, c.url, c.claim_text, c.quote),
+        )
+    count = len(citations)
+    conn.execute(
+        "UPDATE notes SET source_count=?, updated_at=(strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id=?",
+        (count, note_id),
+    )
+    return count
+
+
+def _list_citations(conn, note_id: int):
+    return conn.execute(
+        """
+        SELECT id, note_id, ordinal, label, url, claim_text, quote, created_at
+        FROM citations
+        WHERE note_id=?
+        ORDER BY ordinal ASC, id ASC
+        """,
+        (note_id,),
+    ).fetchall()
 
 
 def _base_shell(body: str, title: str = "qbrain") -> str:
@@ -336,6 +381,10 @@ def create_note(
         (inp.title, inp.body, inp.stage, inp.status, inp.confidence, inp.source_count),
     )
     note_id = cur.lastrowid
+
+    if inp.citations:
+        _replace_citations(conn, note_id, inp.citations)
+
     row = conn.execute(
         "SELECT id,title,body,stage,status,confidence,source_count,created_at,updated_at FROM notes WHERE id=?",
         (note_id,),
@@ -377,6 +426,9 @@ def update_note(
         conn.close()
         raise HTTPException(status_code=404, detail="Note not found")
 
+    if inp.citations is not None:
+        _replace_citations(conn, note_id, inp.citations)
+
     row = conn.execute(
         "SELECT id,title,body,stage,status,confidence,source_count,created_at,updated_at FROM notes WHERE id=?",
         (note_id,),
@@ -416,6 +468,41 @@ def promote_note(
     conn.commit()
     conn.close()
     return NoteItem(**dict(row))
+
+
+@app.get("/api/notes/{note_id}/citations", response_model=CitationListResponse, tags=["query"])
+def list_note_citations(
+    note_id: Annotated[int, Path(ge=1)],
+) -> CitationListResponse:
+    conn = connect()
+    exists = conn.execute("SELECT 1 FROM notes WHERE id=?", (note_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Note not found")
+    rows = _list_citations(conn, note_id)
+    conn.close()
+    return CitationListResponse(citations=[CitationItem(**dict(r)) for r in rows])
+
+
+@app.put("/api/notes/{note_id}/citations", response_model=CitationListResponse, tags=["mutation"])
+def replace_note_citations(
+    note_id: Annotated[int, Path(ge=1)],
+    inp: CitationReplaceRequest,
+    x_api_token: Annotated[str | None, Header(alias="X-API-Token")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> CitationListResponse:
+    _authorize_mutation(x_api_token, authorization)
+    conn = connect()
+    exists = conn.execute("SELECT 1 FROM notes WHERE id=?", (note_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    _replace_citations(conn, note_id, inp.citations)
+    rows = _list_citations(conn, note_id)
+    conn.commit()
+    conn.close()
+    return CitationListResponse(citations=[CitationItem(**dict(r)) for r in rows])
 
 
 @app.get("/api/review/queue", response_model=NoteListResponse, tags=["query"])
@@ -543,12 +630,31 @@ def ui_note(note_id: int) -> HTMLResponse:
         """,
         (note_id,),
     ).fetchone()
+    citation_rows = _list_citations(conn, note_id)
     conn.close()
 
     if row is None:
         raise HTTPException(status_code=404, detail='Note not found')
 
-    rendered = _render_markdown(row['body'])
+    rendered = _render_note_markdown(row['body'])
+    citations_html = ""
+    if citation_rows:
+        li_parts: list[str] = []
+        for c in citation_rows:
+            url = html.escape(c["url"], quote=True)
+            label = html.escape((c["label"] or c["url"]).strip())
+            claim = html.escape(c["claim_text"].strip())
+            quote = html.escape(c["quote"].strip())
+            extra = ""
+            if claim:
+                extra += f"<div class='muted'>Claim: {claim}</div>"
+            if quote:
+                extra += f"<blockquote style='margin:.35rem 0 0 .8rem'>{quote}</blockquote>"
+            li_parts.append(
+                f"<li id='cite-{c['ordinal']}'><a href='{url}' target='_blank' rel='noopener noreferrer'>{label}</a>{extra}</li>"
+            )
+        citations_html = "<h3>Citations</h3><ol>" + "".join(li_parts) + "</ol>"
+
     body = (
         f"<h2 style='margin:.2rem 0'>{row['title']}</h2>"
         "<div class='chips'>"
@@ -558,6 +664,7 @@ def ui_note(note_id: int) -> HTMLResponse:
         f"<span class='chip'>sources: {row['source_count']}</span>"
         "</div>"
         f"<article>{rendered}</article>"
+        f"{citations_html}"
     )
     return HTMLResponse(body)
 
