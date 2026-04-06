@@ -27,6 +27,7 @@ API:
 - `/api/ingest/batch`
 - `/api/extract-links/{source_id}`
 - `/api/discover/from-source/{source_id}`
+- `/api/discover/from-note/{note_id}`
 - `/api/notes` (GET/POST/PATCH + promote)
 - `/api/review/queue`
 

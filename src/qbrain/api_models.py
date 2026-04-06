@@ -93,6 +93,14 @@ class DiscoverResponse(BaseModel):
     ingested: int = 0
 
 
+class NoteDiscoverResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    note_id: int
+    discovered: int
+    links: list[str]
+    ingested: int = 0
+
+
 class NoteCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str

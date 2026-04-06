@@ -19,6 +19,7 @@ from .api_models import (
     IngestRequest,
     IngestResponse,
     NoteCreateRequest,
+    NoteDiscoverResponse,
     NoteItem,
     NoteListResponse,
     NoteUpdateRequest,
@@ -76,6 +77,8 @@ def _base_shell(body: str, title: str = "qbrain") -> str:
       code {{ background: #9992; padding: .1rem .3rem; border-radius: .3rem; }}
       .note-row {{ border-bottom: 1px solid #9993; padding: .5rem 0; display:flex; justify-content:space-between; gap:.5rem; }}
       .btn {{ border:1px solid #9994; border-radius:.45rem; padding:.2rem .5rem; font-size:.85rem; }}
+      .chips {{ display:flex; gap:.4rem; flex-wrap:wrap; margin:.35rem 0 .6rem; }}
+      .chip {{ border:1px solid #9994; border-radius:999px; padding:.12rem .5rem; font-size:.78rem; }}
       @media (max-width: 900px) {{ .layout {{ grid-template-columns: 1fr; }} }}
     </style>
   </head>
@@ -244,6 +247,43 @@ def discover_from_source(
 
     return DiscoverResponse(
         source_id=source_id,
+        discovered=len(links),
+        links=links,
+        ingested=ingested,
+    )
+
+
+@app.post(
+    "/api/discover/from-note/{note_id}",
+    response_model=NoteDiscoverResponse,
+    tags=["mutation"],
+)
+def discover_from_note(
+    note_id: Annotated[int, Path(ge=1)],
+    inp: DiscoverRequest,
+    x_api_token: Annotated[str | None, Header(alias="X-API-Token")] = None,
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> NoteDiscoverResponse:
+    _authorize_mutation(x_api_token, authorization)
+
+    conn = connect()
+    row = conn.execute("SELECT body FROM notes WHERE id=?", (note_id,)).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Note not found")
+
+    links = extract_links(row["body"])[: inp.limit]
+    ingested = 0
+    if inp.ingest:
+        for link in links:
+            try:
+                ingest_source(link)
+                ingested += 1
+            except Exception:
+                pass
+
+    return NoteDiscoverResponse(
+        note_id=note_id,
         discovered=len(links),
         links=links,
         ingested=ingested,
@@ -503,7 +543,12 @@ def ui_note(note_id: int) -> HTMLResponse:
     rendered = _render_markdown(row['body'])
     body = (
         f"<h2 style='margin:.2rem 0'>{row['title']}</h2>"
-        f"<p class='muted'>stage={row['stage']} · status={row['status']} · confidence={row['confidence']}</p>"
+        "<div class='chips'>"
+        f"<span class='chip'>stage: {row['stage']}</span>"
+        f"<span class='chip'>status: {row['status']}</span>"
+        f"<span class='chip'>confidence: {float(row['confidence']):.2f}</span>"
+        f"<span class='chip'>sources: {row['source_count']}</span>"
+        "</div>"
         f"<article>{rendered}</article>"
     )
     return HTMLResponse(body)
