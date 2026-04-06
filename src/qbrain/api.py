@@ -455,10 +455,17 @@ def ui_home() -> HTMLResponse:
 
     <div class='layout' style='margin-top:1rem'>
       <aside class='card'>
-        <h3 style='margin:.2rem 0 .6rem'>Notes</h3>
-        <div id='notelist' hx-get='/ui/notes' hx-trigger='load' hx-swap='innerHTML'>
+        <h3 style='margin:.2rem 0 .6rem'>Published notes</h3>
+        <div id='notelist-published' hx-get='/ui/notes?stage=research' hx-trigger='load' hx-swap='innerHTML'>
           <div class='muted'>Loading notes…</div>
         </div>
+
+        <details style='margin-top:.8rem'>
+          <summary class='muted' style='cursor:pointer'>Scratch / drafts</summary>
+          <div id='notelist-scratch' hx-get='/ui/notes?stage=scratch' hx-trigger='revealed' hx-swap='innerHTML' style='margin-top:.4rem'>
+            <div class='muted'>Expand to load drafts…</div>
+          </div>
+        </details>
       </aside>
       <main id='mainview' class='card'>
         <div class='muted'>Start typing to search…</div>
@@ -510,7 +517,8 @@ def ui_notes(
     conn.close()
 
     if not rows:
-        return HTMLResponse("<div class='muted'>No notes yet.</div>")
+        label = "published" if stage == "research" else "draft"
+        return HTMLResponse(f"<div class='muted'>No {label} notes yet.</div>")
 
     out: list[str] = []
     for r in rows:
